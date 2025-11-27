@@ -63,13 +63,24 @@ class BPETokenizer:
         key_to_merge = list(set(self.tmp.pop(pair)))
         token_new = pair[0] + pair[1]
         for key in key_to_merge:
-            assert key in self.counts.keys(), f"Key {key} not found in {self.counts.keys()}"
+            # assert key in self.counts.keys(), f"Key {key} not found in self.counts.keys()"
+            if key not in self.counts.keys(): continue
             old_freq = self.counts.pop(key)
             key_new = self._build_new_key(key, pair, token_new)
             self.counts[key_new] = self.counts.get(key_new, 0) + old_freq
-        
-        self._build_stats_key()
-            
+
+            for i in range(len(key)-1):
+                pair_to_modify = (key[i], key[i+1])
+                self.stats[pair_to_modify] -= old_freq
+                
+            for i in range(len(key_new)-1): # Add freq of new key
+                pair_to_modify = (key_new[i], key_new[i+1])
+                self.stats[pair_to_modify] += old_freq
+                self.tmp[pair_to_modify] = self.tmp.get(pair_to_modify, []) + [key_new]
+                    
+        self.pair_heap = []
+        for pair, freq in self.stats.items():
+            self._push_pair(pair, freq)
                         
     def train(self):
         merges = []
