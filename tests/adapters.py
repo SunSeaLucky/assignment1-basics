@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import cs336_basics
 from collections.abc import Iterable
 from typing import IO, Any, BinaryIO
 
@@ -589,4 +590,4 @@ def run_train_bpe(
                 representing that <token1> was merged with <token2>.
                 Merges are ordered by order of creation.
     """
-    raise NotImplementedError
+    return cs336_basics.train_bpe.train_bpe(input_path, vocab_size, special_tokens)
