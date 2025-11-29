@@ -6,6 +6,7 @@ import multiprocessing as mp
 import heapq
 from functools import reduce
 from .pretokenization_example import find_chunk_boundaries
+PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
 class ReverseLexOrderPair:
     def __init__(self, pair: tuple[bytes, bytes]):
@@ -17,7 +18,7 @@ class ReverseLexOrderPair:
     def __eq__(self, other: "ReverseLexOrderPair") -> bool:
         return self.pair == other.pair
 
-class BPETokenizer:
+class BPE:
     def __init__(self, counts: dict[tuple, int], vocab_size, token_initial: list[bytes]):
         self.counts = counts
         self.vocab_size = vocab_size
@@ -136,7 +137,6 @@ def train_bpe(
     """
     
     special_pattern = re.compile("|".join(re.escape(tok) for tok in special_tokens))
-    PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
     token_initial  = [tok.encode('utf-8') for tok in special_tokens] + [bytes([i]) for i in range(256)]
     counts = []
@@ -161,5 +161,5 @@ def train_bpe(
             A[k] = A.get(k, 0) + v
         return A
     counts = [c.get() for c in counts]
-    tokenizer = BPETokenizer(reduce(merge_dict, counts, {}), vocab_size, token_initial)
+    tokenizer = BPE(reduce(merge_dict, counts, {}), vocab_size, token_initial)
     return tokenizer.train()
