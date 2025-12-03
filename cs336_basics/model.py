@@ -1,6 +1,6 @@
 import torch
 import math
-from einops import einsum, reduce
+from einops import einsum, reduce, rearrange
 
 
 class Linear(torch.nn.Module):
@@ -23,6 +23,14 @@ class Linear(torch.nn.Module):
 
 class Embedding(torch.nn.Module):
     def __init__(self, num_embeddings: int, embedding_dim: int, device: None, dtype: None, **kwargs):
+        """_summary_
+
+        Args:
+            num_embeddings (int): = vocab_size (int): The number of embeddings in the vocabulary
+            embedding_dim (int): = d_model (int): The size of the embedding dimension
+            device (None): _description_
+            dtype (None): _description_
+        """
         super().__init__()
         w = torch.empty((num_embeddings, embedding_dim), device=device, dtype=dtype)
         torch.nn.init.trunc_normal_(w, mean=0, std=1, a=-3, b=3)
@@ -68,3 +76,45 @@ class SwiGLU(torch.nn.Module):
         _x = self.w1(x)
         x_silu = _x * torch.sigmoid(_x)
         return self.w2(self.w3(x) * x_silu)
+
+
+class RotaryPositionalEmbedding(torch.nn.Module):
+    def __init__(
+        self,
+        theta: float,
+        d_k: int,
+        max_seq_len: int,
+        device: torch.device | None = None,
+    ):
+        """_summary_
+
+        Args:
+            theta (float): RoPE parameter.
+            d_k (int): Embedding dimension size for the query or key tensor.
+            max_seq_len (int): Maximum sequence length to pre-cache if your implementation does that.
+            device (torch.device | None, optional): _description_. Defaults to None.
+        """
+        super().__init__()
+        position = torch.arange(max_seq_len, device=device)  # [seq_len]
+        freq = torch.arange(0, d_k, 2, device=device) / d_k  # [d_k/2]
+        freq_inv = 1.0 / (theta**freq)  # [d_k/2]
+        angles = einsum(position, freq_inv, "seq_len, d_k_half -> seq_len d_k_half")
+        self.register_buffer("cos", torch.cos(angles), persistent=False)  # [seq_len, d_k/2]
+        self.register_buffer("sin", torch.sin(angles), persistent=False)  # [seq_len, d_k/2]
+
+    def forward(
+        self, x: torch.Tensor, token_positions: torch.Tensor
+    ) -> torch.Tensor:  # ([..., seq_len, d_k], [..., seq_len]) -> [..., seq_len, d_k]
+        pos_sin = self.sin[token_positions]  # [..., seq_len, d_k/2]
+        pos_cos = self.cos[token_positions]  # [..., seq_len, d_k/2]
+
+        x_even = x[..., 0::2]  # [..., seq_len, d_k/2]
+        x_old = x[..., 1::2]  # [..., seq_len, d_k/2]
+
+        x_even_rot = x_even * pos_cos - x_old * pos_sin  # [..., seq_len, d_k/2]
+        x_old_rot = x_even * pos_sin + x_old * pos_cos  # [..., seq_len, d_k/2]
+
+        x_rot = rearrange([x_even_rot, x_old_rot], "two ... -> ... two")
+        x_rot = rearrange(x_rot, "... d1 d2 -> ... (d1 d2)")
+
+        return x_rot
