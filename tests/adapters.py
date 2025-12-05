@@ -9,6 +9,7 @@ import numpy.typing as npt
 import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
+from loguru import logger
 
 
 def run_linear(
@@ -190,19 +191,20 @@ def run_multihead_self_attention_with_rope(
         implementation with the given QKV projection weights and input features.
     """
     casual_attn_rope = cs336_basics.model.CausalMultiHeadAttention(
-        d_model, num_heads, q_proj_weight.device, q_proj_weight.dtype
-    )
-    casual_attn_rope.w_q.w.data = q_proj_weight
-    casual_attn_rope.w_k.w.data = k_proj_weight
-    casual_attn_rope.w_v.w.data = v_proj_weight
-    casual_attn_rope.w_o.w.data = o_proj_weight
-    return casual_attn_rope(
-        in_features,
+        d_model,
+        num_heads,
+        q_proj_weight.device,
+        q_proj_weight.dtype,
         rope=cs336_basics.model.RotaryPositionalEmbedding(
             theta, d_model // num_heads, max_seq_len, q_proj_weight.device
         ),
         token_positions=token_positions,
     )
+    casual_attn_rope.w_q.w.data = q_proj_weight
+    casual_attn_rope.w_k.w.data = k_proj_weight
+    casual_attn_rope.w_v.w.data = v_proj_weight
+    casual_attn_rope.w_o.w.data = o_proj_weight
+    return casual_attn_rope(in_features)
 
 
 def run_rope(
@@ -298,7 +300,27 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    rope = cs336_basics.model.RotaryPositionalEmbedding(theta, d_model // num_heads, max_seq_len, in_features.device)
+    transformer_block = cs336_basics.model.TransformerBlock(
+        d_model, num_heads, d_ff, in_features.device, in_features.dtype, rope
+    )
+    # logger.debug(f"Loading state dict into transformer block: {weights.keys()}")
+    # Loading state dict into transformer block:
+    # dict_keys(['attn.q_proj.weight', 'attn.k_proj.weight', 'attn.v_proj.weight',
+    # 'attn.output_proj.weight', 'ffn.w1.weight', 'ffn.w2.weight',
+    # 'ffn.w3.weight', 'ln1.weight', 'ln2.weight'])
+
+    transformer_block.attn.w_q.w.data = weights["attn.q_proj.weight"]
+    transformer_block.attn.w_k.w.data = weights["attn.k_proj.weight"]
+    transformer_block.attn.w_v.w.data = weights["attn.v_proj.weight"]
+    transformer_block.attn.w_o.w.data = weights["attn.output_proj.weight"]
+    transformer_block.norm1.w.data = weights["ln1.weight"]
+    transformer_block.norm2.w.data = weights["ln2.weight"]
+    transformer_block.ff.w1.w.data = weights["ffn.w1.weight"]
+    transformer_block.ff.w2.w.data = weights["ffn.w2.weight"]
+    transformer_block.ff.w3.w.data = weights["ffn.w3.weight"]
+
+    return transformer_block(in_features)
 
 
 def run_transformer_lm(

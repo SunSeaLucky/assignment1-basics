@@ -141,10 +141,22 @@ class RotaryPositionalEmbedding(torch.nn.Module):
 
 
 class CausalMultiHeadAttention(torch.nn.Module):
-    def __init__(self, d_model: int, num_heads: int, device=None, dtype=None):
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        device=None,
+        dtype=None,
+        rope: RotaryPositionalEmbedding | None = None,
+        token_positions: torch.Tensor | None = None,
+    ):
         super().__init__()
         self.d_model = d_model
         self.num_heads = num_heads
+        self.device = device
+        self.dtype = dtype
+        self.rope = rope
+        self.token_positions = token_positions
 
         self.w_q = Linear(d_model, d_model, device, dtype)
         self.w_k = Linear(d_model, d_model, device, dtype)
@@ -152,12 +164,7 @@ class CausalMultiHeadAttention(torch.nn.Module):
 
         self.w_o = Linear(d_model, d_model, device, dtype)
 
-    def forward(
-        self,
-        x: torch.Tensor,  # [batch_size, seq_len, d_model]
-        rope: RotaryPositionalEmbedding | None = None,
-        token_positions: torch.Tensor | None = None,
-    ):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:  # [batch_size, seq_len, d_model]
         q = self.w_q(x)
         k = self.w_k(x)
         v = self.w_v(x)
@@ -172,15 +179,39 @@ class CausalMultiHeadAttention(torch.nn.Module):
             v, "batch_size seq_len (num_heads d_v) -> batch_size num_heads seq_len d_v", num_heads=self.num_heads
         )
 
-        if token_positions is None:
-            token_positions = torch.arange(x.shape[-2], device=x.device)
-        if rope is not None:
-            q = rope(q, token_positions)
-            k = rope(k, token_positions)
+        if self.token_positions is None:
+            self.token_positions = torch.arange(x.shape[-2], device=x.device)
+        if self.rope is not None:
+            q = self.rope(q, self.token_positions)
+            k = self.rope(k, self.token_positions)
 
         mask = ~torch.triu(torch.ones((x.shape[-2], x.shape[-2]), device=x.device, dtype=torch.bool), diagonal=1)
 
         y = scaled_dot_product_attention(q, k, v, mask)
         y = rearrange(y, "batch_size num_heads seq_len d_v -> batch_size seq_len (num_heads d_v)")
         y = self.w_o(y)
+        return y
+
+
+class TransformerBlock(torch.nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        d_ff: int,
+        device=None,
+        dtype=None,
+        rope: RotaryPositionalEmbedding | None = None,
+    ):
+        super().__init__()
+
+        self.norm1 = RMSNorm(d_model, device=device, dtype=dtype)
+        self.norm2 = RMSNorm(d_model, device=device, dtype=dtype)
+
+        self.attn = CausalMultiHeadAttention(d_model, num_heads, device=device, dtype=dtype, rope=rope)
+        self.ff = SwiGLU(d_model, d_ff, device=device, dtype=dtype)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        y = x + self.attn(self.norm1(x))
+        y = y + self.ff(self.norm2(y))
         return y
