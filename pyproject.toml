@@ -19,6 +19,7 @@ dependencies = [
     "tqdm>=4.67.1",
     "wandb>=0.19.7",
     "ty>=0.0.1a16",
+    "loguru>=0.7.3",
 ]
 
 [build-system]
@@ -28,6 +29,10 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-name = "cs336_basics"
 module-root = ""
+
+[[tool.uv.index]]
+url = "https://pypi.org/simple"
+default = true
 
 [tool.uv]
 package = true
