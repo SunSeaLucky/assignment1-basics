@@ -3,6 +3,26 @@ import math
 from einops import einsum, reduce, rearrange
 
 
+def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:
+    x_max = x.max(dim=dim, keepdim=True).values
+    x_exp = torch.exp(x - x_max)
+    return x_exp / x_exp.sum(dim=dim, keepdim=True)
+
+
+def scaled_dot_product_attention(
+    Q: torch.Tensor,  # (batch_size, ..., seq_len, d_k)
+    K: torch.Tensor,  # (batch_size, ..., seq_len, d_k)
+    V: torch.Tensor,  # (batch_size, ..., seq_len, d_v)
+    mask: torch.Tensor | None = None,  # (seq_len, seq_len)
+) -> torch.Tensor:  # (batch_size, ..., d_v)
+    d_k = Q.shape[-1]
+    score_attention = einsum(Q, K, "... seq_len_q d_k, ... seq_len_k d_k -> ... seq_len_q seq_len_k") / math.sqrt(d_k)
+    if mask is not None:
+        score_attention = torch.where(mask, score_attention, float("-inf"))
+    score_attention = softmax(score_attention, dim=-1)  # [... seq_len_q seq_len_k]
+    return einsum(score_attention, V, "... seq_len_q seq_len_k, ... seq_len_k d_v -> ... seq_len_q d_v")
+
+
 class Linear(torch.nn.Module):
     def __init__(self, in_features: int, out_features: int, device: torch.device, dtype: torch.dtype):
         super().__init__()
@@ -120,21 +140,47 @@ class RotaryPositionalEmbedding(torch.nn.Module):
         return x_rot
 
 
-def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:
-    x_max = x.max(dim=dim, keepdim=True).values
-    x_exp = torch.exp(x - x_max)
-    return x_exp / x_exp.sum(dim=dim, keepdim=True)
+class CausalMultiHeadAttention(torch.nn.Module):
+    def __init__(self, d_model: int, num_heads: int, device=None, dtype=None):
+        super().__init__()
+        self.d_model = d_model
+        self.num_heads = num_heads
 
+        self.w_q = Linear(d_model, d_model, device, dtype)
+        self.w_k = Linear(d_model, d_model, device, dtype)
+        self.w_v = Linear(d_model, d_model, device, dtype)
 
-def scaled_dot_product_attention(
-    Q: torch.Tensor,  # (batch_size, ..., seq_len, d_k)
-    K: torch.Tensor,  # (batch_size, ..., seq_len, d_k)
-    V: torch.Tensor,  # (batch_size, ..., seq_len, d_v)
-    mask: torch.Tensor | None = None,  # (seq_len, seq_len)
-) -> torch.Tensor:  # (batch_size, ..., d_v)
-    d_k = Q.shape[-1]
-    score_attention = einsum(Q, K, "... seq_len_q d_k, ... seq_len_k d_k -> ... seq_len_q seq_len_k") / math.sqrt(d_k)
-    if mask is not None:
-        score_attention = torch.where(mask, score_attention, float("-inf"))
-    score_attention = softmax(score_attention, dim=-1)  # [... seq_len_q seq_len_k]
-    return einsum(score_attention, V, "... seq_len_q seq_len_k, ... seq_len_k d_v -> ... seq_len_q d_v")
+        self.w_o = Linear(d_model, d_model, device, dtype)
+
+    def forward(
+        self,
+        x: torch.Tensor,  # [batch_size, seq_len, d_model]
+        rope: RotaryPositionalEmbedding | None = None,
+        token_positions: torch.Tensor | None = None,
+    ):
+        q = self.w_q(x)
+        k = self.w_k(x)
+        v = self.w_v(x)
+
+        q = rearrange(
+            q, "batch_size seq_len (num_heads d_k) -> batch_size num_heads seq_len d_k", num_heads=self.num_heads
+        )
+        k = rearrange(
+            k, "batch_size seq_len (num_heads d_k) -> batch_size num_heads seq_len d_k", num_heads=self.num_heads
+        )
+        v = rearrange(
+            v, "batch_size seq_len (num_heads d_v) -> batch_size num_heads seq_len d_v", num_heads=self.num_heads
+        )
+
+        if token_positions is None:
+            token_positions = torch.arange(x.shape[-2], device=x.device)
+        if rope is not None:
+            q = rope(q, token_positions)
+            k = rope(k, token_positions)
+
+        mask = ~torch.triu(torch.ones((x.shape[-2], x.shape[-2]), device=x.device, dtype=torch.bool), diagonal=1)
+
+        y = scaled_dot_product_attention(q, k, v, mask)
+        y = rearrange(y, "batch_size num_heads seq_len d_v -> batch_size seq_len (num_heads d_v)")
+        y = self.w_o(y)
+        return y

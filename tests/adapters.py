@@ -142,7 +142,14 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    causal_attn = cs336_basics.model.CausalMultiHeadAttention(
+        d_model, num_heads, q_proj_weight.device, q_proj_weight.dtype
+    )
+    causal_attn.w_q.w.data = q_proj_weight
+    causal_attn.w_k.w.data = k_proj_weight
+    causal_attn.w_v.w.data = v_proj_weight
+    causal_attn.w_o.w.data = o_proj_weight
+    return causal_attn(in_features)
 
 
 def run_multihead_self_attention_with_rope(
@@ -182,7 +189,20 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    casual_attn_rope = cs336_basics.model.CausalMultiHeadAttention(
+        d_model, num_heads, q_proj_weight.device, q_proj_weight.dtype
+    )
+    casual_attn_rope.w_q.w.data = q_proj_weight
+    casual_attn_rope.w_k.w.data = k_proj_weight
+    casual_attn_rope.w_v.w.data = v_proj_weight
+    casual_attn_rope.w_o.w.data = o_proj_weight
+    return casual_attn_rope(
+        in_features,
+        rope=cs336_basics.model.RotaryPositionalEmbedding(
+            theta, d_model // num_heads, max_seq_len, q_proj_weight.device
+        ),
+        token_positions=token_positions,
+    )
 
 
 def run_rope(
